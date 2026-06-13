@@ -8,6 +8,7 @@ const turnLabel = document.querySelector("#turn-label");
 const moveCountLabel = document.querySelector("#move-count");
 const blackCapturesLabel = document.querySelector("#black-captures");
 const whiteCapturesLabel = document.querySelector("#white-captures");
+const komiLabel = document.querySelector("#komi-label");
 const moveLog = document.querySelector("#move-log");
 const lastMessage = document.querySelector("#last-message");
 
@@ -18,6 +19,11 @@ const STAR_POINTS = {
   9: [2, 4, 6],
   13: [3, 6, 9],
   19: [3, 9, 15],
+};
+const KOMI_BY_SIZE = {
+  9: 7.0,
+  13: 7.5,
+  19: 7.5,
 };
 
 const state = {
@@ -184,6 +190,7 @@ function syncUi() {
   moveCountLabel.textContent = `${state.history.length}`;
   blackCapturesLabel.textContent = `${state.captures[BLACK]}`;
   whiteCapturesLabel.textContent = `${state.captures[WHITE]}`;
+  komiLabel.textContent = KOMI_BY_SIZE[state.size].toFixed(1);
   moveLog.replaceChildren();
 
   for (const entry of state.history) {

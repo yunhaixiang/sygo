@@ -9,6 +9,20 @@ Sygo is a from-scratch Go AI project scaffold. The intended direction is:
 - optional neurosymbolic experiments layered around the core engine
 - a local browser GUI for play, inspection, and future AI interaction
 
+## Rules Target
+
+Sygo targets online computer Go compatibility first. The default ruleset is
+CGOS-style modified Tromp-Taylor:
+
+- area scoring
+- suicide forbidden
+- full play-out for unresolved dead stones or scoring disputes
+- komi: 7.5 on 19x19 and 13x13, 7.0 on 9x9
+- simple ko initially, with superko support planned as an engine option
+
+The GUI currently enforces stone placement, capture, pass, and no-suicide. Ko,
+final area scoring, and full GTP/SGF rule metadata are still scaffold items.
+
 ## Layout
 
 ```text
@@ -29,7 +43,8 @@ python -m http.server 8000
 
 Then visit `http://localhost:8000/gui/`.
 
-The initial GUI supports 9x9, 13x13, and 19x19 board sizes, stone placement, captures, pass, undo, reset, and a move log.
+The initial GUI supports 9x9, 13x13, and 19x19 board sizes, stone placement,
+captures, pass, undo, reset, and a move log.
 
 ## Python Package
 
