@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sygo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="board-pane" aria-label="Go board">
+        <canvas id="go-board" width="960" height="960" aria-label="Interactive Go board"></canvas>
+      </section>
+
+      <aside class="side-panel" aria-label="Game controls">
+        <header>
+          <p class="eyebrow">Sygo</p>
+          <h1>Go Workbench</h1>
+        </header>
+
+        <div class="status-grid">
+          <div>
+            <span>Turn</span>
+            <strong id="turn-label">Black</strong>
+          </div>
+          <div>
+            <span>Move</span>
+            <strong id="move-count">0</strong>
+          </div>
+          <div>
+            <span>Black captures</span>
+            <strong id="black-captures">0</strong>
+          </div>
+          <div>
+            <span>White captures</span>
+            <strong id="white-captures">0</strong>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label for="board-size">Board size</label>
+          <select id="board-size">
+            <option value="19" selected>19 x 19</option>
+            <option value="13">13 x 13</option>
+            <option value="9">9 x 9</option>
+          </select>
+        </div>
+
+        <div class="button-row">
+          <button id="pass-button" type="button">Pass</button>
+          <button id="undo-button" type="button">Undo</button>
+          <button id="reset-button" type="button">Reset</button>
+        </div>
+
+        <section class="log-panel" aria-label="Move log">
+          <div class="log-header">
+            <h2>Moves</h2>
+            <span id="last-message">Black to play</span>
+          </div>
+          <ol id="move-log"></ol>
+        </section>
+      </aside>
+    </main>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
