@@ -5,21 +5,18 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
-#SBATCH --gres=gpu:h100:1
+#SBATCH --gres=gpu:1
 #SBATCH --mem=64G
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
 set -euo pipefail
 
-# If Trillium uses a generic GPU GRES instead of typed H100 GRES, replace:
-#   #SBATCH --gres=gpu:h100:1
-# with:
-#   #SBATCH --gres=gpu:1
-#
-# If your allocation requires a partition/QOS, add the appropriate lines, e.g.:
+# If your allocation requires a partition/QOS or a constraint to land on H100
+# nodes, add the appropriate lines, e.g.:
 #   #SBATCH --partition=...
 #   #SBATCH --qos=...
+#   #SBATCH --constraint=...
 
 module purge
 
