@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import multiprocessing as mp
 import random
 import time
 from dataclasses import dataclass
@@ -368,7 +369,11 @@ def generate_self_play_games_parallel(
 
     started_at = time.monotonic()
     samples: list[TrainingSample] = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+    mp_context = mp.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=mp_context,
+    ) as executor:
         futures = []
         for worker_id, count in enumerate(chunks, start=1):
             worker_seed = None if seed is None else seed + worker_id - 1

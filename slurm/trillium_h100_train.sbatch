@@ -27,7 +27,13 @@ cd "${SLURM_SUBMIT_DIR}"
 #   source ~/venvs/sygo/bin/activate
 #   python -m pip install --upgrade pip
 #   python -m pip install -e ".[train]"
-source "${SYGO_VENV:-$HOME/venvs/sygo}/bin/activate"
+SYGO_VENV="${SYGO_VENV:-$HOME/venvs/sygo}"
+if [[ ! -f "${SYGO_VENV}/bin/activate" ]]; then
+  echo "Sygo virtualenv not found at ${SYGO_VENV}." >&2
+  echo "Create it on trig-login01 with: python -m venv ${SYGO_VENV} && source ${SYGO_VENV}/bin/activate && python -m pip install -e '.[train]'" >&2
+  exit 1
+fi
+source "${SYGO_VENV}/bin/activate"
 
 if [[ -z "${SYGO_RUN_ROOT:-}" ]]; then
   if [[ -n "${SCRATCH:-}" ]]; then
