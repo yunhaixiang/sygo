@@ -64,6 +64,12 @@ when the number of legal board moves is small enough; override that with
 `--pass-allowed-empty-points`, defaulting to 20% of board area. After pass is
 allowed, Sygo still dampens pass with `--pass-prior-scale`, default `0.02`.
 
+AI resignation is disabled by default while the value net is still young. To
+enable it for human play, start the play server with `--ai-resign`. The default
+AI resign rule is conservative: at least `board_size * board_size` moves, MCTS
+root value at or below `-0.95`, and 5 consecutive Sygo turns meeting that
+threshold. The GUI also has a manual `Resign` button for the human player.
+
 ## Python Package
 
 Install in editable mode once dependencies are ready:
@@ -165,4 +171,24 @@ Use `--compact` for one-line summaries without boards:
 
 ```bash
 python scripts/monitor_selfplay.py --compact "$SCRATCH/sygo-runs/594065/data/selfplay-monitor*.json"
+```
+
+For a Trillium continuation run from an existing checkpoint, set the checkpoint and optional workload overrides in the untracked `.env` file before submitting:
+
+```bash
+SLURM_ACCOUNT=def-yourpi
+SYGO_INITIAL_CHECKPOINT=/scratch/yunhai/sygo-runs/594065/checkpoints/sygo-9x9-h100-pass20-round8.pt
+SYGO_CPUS_PER_TASK=24
+SYGO_WORKERS=24
+SYGO_ROUNDS=10
+SYGO_GAMES_PER_ROUND=240
+SYGO_SIMULATIONS=128
+SYGO_EPOCHS=24
+SYGO_PREFIX=sygo-9x9-h100-continue
+```
+
+Then submit:
+
+```bash
+bash slurm/submit_trillium_h100_train.sh
 ```

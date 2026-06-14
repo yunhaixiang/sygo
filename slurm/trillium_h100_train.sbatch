@@ -3,7 +3,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=10
+#SBATCH --cpus-per-task=24
 #SBATCH --gpus-per-node=h100:1
 
 set -euo pipefail
@@ -71,20 +71,38 @@ if torch.cuda.is_available():
     print("cuda_device", torch.cuda.get_device_name(0))
 PY
 
-python -m sygo.ai.training cycle \
-  --data-dir "${SYGO_DATA_DIR}" \
-  --checkpoint-dir "${SYGO_CHECKPOINT_DIR}" \
-  --monitor-path "${SYGO_MONITOR_PATH}" \
-  --rounds 8 \
-  --games-per-round 120 \
-  --workers "${SLURM_CPUS_PER_TASK}" \
-  --board-size 9 \
-  --simulations 96 \
-  --epochs 20 \
-  --batch-size 256 \
-  --channels 96 \
-  --blocks 6 \
-  --device cuda \
-  --prefix sygo-9x9-h100-pass20 \
-  --log-every 1 \
-  --train-log-every 10
+cycle_args=(
+  --data-dir "${SYGO_DATA_DIR}"
+  --checkpoint-dir "${SYGO_CHECKPOINT_DIR}"
+  --monitor-path "${SYGO_MONITOR_PATH}"
+  --rounds "${SYGO_ROUNDS:-10}"
+  --games-per-round "${SYGO_GAMES_PER_ROUND:-240}"
+  --workers "${SYGO_WORKERS:-${SLURM_CPUS_PER_TASK}}"
+  --board-size "${SYGO_BOARD_SIZE:-9}"
+  --simulations "${SYGO_SIMULATIONS:-128}"
+  --epochs "${SYGO_EPOCHS:-24}"
+  --batch-size "${SYGO_BATCH_SIZE:-256}"
+  --channels "${SYGO_CHANNELS:-96}"
+  --blocks "${SYGO_BLOCKS:-6}"
+  --device "${SYGO_DEVICE:-cuda}"
+  --prefix "${SYGO_PREFIX:-sygo-9x9-h100-continue}"
+  --log-every "${SYGO_LOG_EVERY:-1}"
+  --train-log-every "${SYGO_TRAIN_LOG_EVERY:-10}"
+)
+
+if [[ -n "${SYGO_INITIAL_CHECKPOINT:-}" ]]; then
+  cycle_args+=(--initial-checkpoint "${SYGO_INITIAL_CHECKPOINT}")
+fi
+
+echo "initial_checkpoint=${SYGO_INITIAL_CHECKPOINT:-none}"
+echo "rounds=${SYGO_ROUNDS:-10}"
+echo "games_per_round=${SYGO_GAMES_PER_ROUND:-240}"
+echo "workers=${SYGO_WORKERS:-${SLURM_CPUS_PER_TASK}}"
+echo "simulations=${SYGO_SIMULATIONS:-128}"
+echo "epochs=${SYGO_EPOCHS:-24}"
+echo "batch_size=${SYGO_BATCH_SIZE:-256}"
+echo "channels=${SYGO_CHANNELS:-96}"
+echo "blocks=${SYGO_BLOCKS:-6}"
+echo "prefix=${SYGO_PREFIX:-sygo-9x9-h100-continue}"
+
+python -m sygo.ai.training cycle "${cycle_args[@]}"

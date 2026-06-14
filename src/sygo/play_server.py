@@ -45,11 +45,17 @@ class PlaySession:
     min_pass_moves: int | None = None
     pass_allowed_empty_points: int | None = None
     pass_prior_scale: float | None = None
+    ai_resign_enabled: bool = False
+    ai_resign_threshold: float = -0.95
+    ai_resign_min_moves: int | None = None
+    ai_resign_consecutive_turns: int = 5
     size: int = 9
     human: Color = Color.BLACK
     state: GameState = field(default_factory=lambda: GameState(size=9))
     moves: list[dict[str, Any]] = field(default_factory=list)
     model_cache: dict[str, PlayModel] = field(default_factory=dict)
+    resigned_by: Color | None = None
+    ai_resign_streak: int = 0
 
     @property
     def ai(self) -> Color:
@@ -71,8 +77,11 @@ class PlaySession:
         if not self.checkpoint_dir.exists():
             return []
         return [
-            {"id": path.name, "label": path.name}
-            for path in sorted(self.checkpoint_dir.glob("*.pt"))
+            {
+                "id": path.relative_to(self.checkpoint_dir).as_posix(),
+                "label": path.relative_to(self.checkpoint_dir).as_posix(),
+            }
+            for path in sorted(self.checkpoint_dir.rglob("*.pt"))
             if path.is_file()
         ]
 
@@ -92,6 +101,8 @@ class PlaySession:
         self.human = human
         self.state = GameState(size=size)
         self.moves = []
+        self.resigned_by = None
+        self.ai_resign_streak = 0
         if self.state.to_play is self.ai:
             self._play_ai_move()
         return self.payload("New game")
@@ -104,12 +115,13 @@ class PlaySession:
             return
 
         checkpoint_path = self._resolve_checkpoint(checkpoint_id)
-        if checkpoint_path.name not in self.model_cache:
-            self.model_cache[checkpoint_path.name] = build_play_model(checkpoint_path, self.device)
-        play_model = self.model_cache[checkpoint_path.name]
+        checkpoint_key = checkpoint_path.relative_to(self.checkpoint_dir.resolve()).as_posix()
+        if checkpoint_key not in self.model_cache:
+            self.model_cache[checkpoint_key] = build_play_model(checkpoint_path, self.device)
+        play_model = self.model_cache[checkpoint_key]
         self.evaluator = play_model.evaluator
         self.supported_sizes = play_model.supported_sizes
-        self.current_checkpoint = checkpoint_path.name
+        self.current_checkpoint = checkpoint_key
 
     def _resolve_checkpoint(self, checkpoint_id: str) -> Path:
         checkpoint_dir = self.checkpoint_dir.resolve()
@@ -123,7 +135,7 @@ class PlaySession:
         return checkpoint_path
 
     def play_human(self, point: Point | None) -> dict[str, Any]:
-        if self.state.is_over:
+        if self.is_over:
             return self.payload("Game is over")
         if self.state.to_play is not self.human:
             return self.payload("Waiting for Sygo")
@@ -131,12 +143,18 @@ class PlaySession:
         played_by = self.state.to_play
         self.state = self.state.play(point)
         self._record_move(played_by, point, None)
-        if not self.state.is_over:
+        if not self.is_over:
             self._play_ai_move()
         return self.payload()
 
+    def resign_human(self) -> dict[str, Any]:
+        if self.is_over:
+            return self.payload("Game is over")
+        self._resign(self.human)
+        return self.payload(f"{self.human.value.title()} resigned")
+
     def _play_ai_move(self) -> None:
-        if self.state.is_over or self.state.to_play is not self.ai:
+        if self.is_over or self.state.to_play is not self.ai:
             return
         result = MCTS(
             evaluator=self.evaluator,
@@ -158,10 +176,42 @@ class PlaySession:
             ),
             rng=random.Random(),
         ).search(self.state)
+        if self._ai_should_resign(result.root_value):
+            self._resign(self.ai, root_value=result.root_value)
+            return
         played_by = self.state.to_play
         point = self.state.index_to_point(result.move_index)
         self.state = self.state.play(point)
         self._record_move(played_by, point, result.root_value)
+
+    @property
+    def is_over(self) -> bool:
+        return self.resigned_by is not None or self.state.is_over
+
+    def _ai_should_resign(self, root_value: float) -> bool:
+        if not self.ai_resign_enabled:
+            return False
+        min_moves = (
+            self.state.size * self.state.size
+            if self.ai_resign_min_moves is None
+            else self.ai_resign_min_moves
+        )
+        if self.state.move_count < min_moves or root_value > self.ai_resign_threshold:
+            self.ai_resign_streak = 0
+            return False
+        self.ai_resign_streak += 1
+        return self.ai_resign_streak >= self.ai_resign_consecutive_turns
+
+    def _resign(self, player: Color, root_value: float | None = None) -> None:
+        self.resigned_by = player
+        self.moves.append(
+            {
+                "number": len(self.moves) + 1,
+                "player": player.value,
+                "move": "resign",
+                "root_value": root_value,
+            }
+        )
 
     def _record_move(self, player: Color, point: Point | None, root_value: float | None) -> None:
         self.moves.append(
@@ -176,6 +226,7 @@ class PlaySession:
     def payload(self, message: str | None = None) -> dict[str, Any]:
         black_player = "User" if self.human is Color.BLACK else "Sygo"
         white_player = "User" if self.human is Color.WHITE else "Sygo"
+        result = self.result()
         data = {
             "mode": "play",
             "black_player": black_player,
@@ -191,18 +242,34 @@ class PlaySession:
                 "white": self.state.captures[Color.WHITE],
             },
             "moves": self.moves,
-            "is_over": self.state.is_over,
+            "is_over": self.is_over,
+            "resigned_by": self.resigned_by.value if self.resigned_by is not None else None,
+            "result": result,
             "area_score": self.state.area_score() if self.state.is_over else None,
             "message": message,
         }
         if message is None:
-            if self.state.is_over:
+            if self.resigned_by is not None:
+                winner = self.resigned_by.opponent
+                data["message"] = f"Game over, {winner.value.title()} wins by resignation"
+            elif self.state.is_over:
                 data["message"] = f"Game over, area score B-W {self.state.area_score():.1f}"
             elif self.state.to_play is self.human:
                 data["message"] = "Your move"
             else:
                 data["message"] = "Sygo to play"
         return data
+
+    def result(self) -> str | None:
+        if self.resigned_by is Color.BLACK:
+            return "W+R"
+        if self.resigned_by is Color.WHITE:
+            return "B+R"
+        if not self.state.is_over:
+            return None
+        score = self.state.area_score()
+        winner = "B" if score > 0 else "W"
+        return f"{winner}+{abs(score):.1f}"
 
 
 class PlayRequestHandler(SimpleHTTPRequestHandler):
@@ -233,6 +300,8 @@ class PlayRequestHandler(SimpleHTTPRequestHandler):
                 payload = self._read_json()
                 point = None if payload.get("pass") else Point(int(payload["row"]), int(payload["col"]))
                 self._send_json(self.session.play_human(point))
+            elif self.path == "/api/resign":
+                self._send_json(self.session.resign_human())
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Unknown API route")
         except (IllegalMoveError, KeyError, TypeError, ValueError) as exc:
@@ -295,6 +364,32 @@ def main() -> None:
         default=None,
         help="Scale Sygo's pass prior after pass becomes legal. Defaults to 0.02.",
     )
+    parser.add_argument(
+        "--ai-resign",
+        action="store_true",
+        help=(
+            "Allow Sygo to resign in play mode. Disabled by default; self-play training is "
+            "unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--ai-resign-threshold",
+        type=float,
+        default=-0.95,
+        help="Sygo may resign when MCTS root value is at or below this value. Default: -0.95.",
+    )
+    parser.add_argument(
+        "--ai-resign-min-moves",
+        type=int,
+        default=None,
+        help="Do not allow Sygo resignation before this move count. Defaults to board_size * board_size.",
+    )
+    parser.add_argument(
+        "--ai-resign-consecutive-turns",
+        type=int,
+        default=5,
+        help="Require this many consecutive losing Sygo turns before resignation. Default: 5.",
+    )
     parser.add_argument("--directory", type=Path, default=Path.cwd())
     args = parser.parse_args()
 
@@ -309,6 +404,10 @@ def main() -> None:
         min_pass_moves=args.min_pass_moves,
         pass_allowed_empty_points=args.pass_allowed_empty_points,
         pass_prior_scale=args.pass_prior_scale,
+        ai_resign_enabled=args.ai_resign,
+        ai_resign_threshold=args.ai_resign_threshold,
+        ai_resign_min_moves=args.ai_resign_min_moves,
+        ai_resign_consecutive_turns=args.ai_resign_consecutive_turns,
         size=play_model.supported_sizes[0],
         state=GameState(size=play_model.supported_sizes[0]),
     )

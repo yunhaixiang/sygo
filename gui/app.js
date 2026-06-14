@@ -6,6 +6,7 @@ const checkpointSelect = document.querySelector("#checkpoint-select");
 const passButton = document.querySelector("#pass-button");
 const undoButton = document.querySelector("#undo-button");
 const resetButton = document.querySelector("#reset-button");
+const resignButton = document.querySelector("#resign-button");
 const startModeButton = document.querySelector("#start-mode-button");
 const stopModeButton = document.querySelector("#stop-mode-button");
 const monitorWorkerSelect = document.querySelector("#monitor-worker");
@@ -47,6 +48,9 @@ const state = {
   moves: [],
   hover: null,
   moveCount: null,
+  gameOver: false,
+  resignedBy: null,
+  result: null,
   monitoring: false,
   apiMode: false,
   apiBusy: false,
@@ -75,6 +79,9 @@ function reset(size = state.size) {
   state.moves = [];
   state.hover = null;
   state.moveCount = null;
+  state.gameOver = false;
+  state.resignedBy = null;
+  state.result = null;
   state.apiMode = false;
   state.apiBusy = false;
   state.mode = "local";
@@ -148,6 +155,7 @@ function cloneBoard(board) {
 }
 
 function playMove(row, col, options = {}) {
+  if (state.gameOver) return false;
   if (state.monitoring) return false;
   if (state.apiMode && !options.localOnly) {
     playApiMove({ row, col });
@@ -199,6 +207,7 @@ function playMove(row, col, options = {}) {
 }
 
 function pass(options = {}) {
+  if (state.gameOver) return false;
   if (state.monitoring) return false;
   if (state.apiMode && !options.localOnly) {
     playApiMove({ pass: true });
@@ -222,6 +231,10 @@ function pass(options = {}) {
 
 function undo() {
   if (state.monitoring || state.apiMode) return;
+  if (state.gameOver) {
+    setMessage("Reset to start a new game", true);
+    return;
+  }
   const previous = state.undoStack.pop();
   if (!previous) {
     setMessage("No move to undo", true);
@@ -238,11 +251,27 @@ function undo() {
   draw();
 }
 
-function recordDisplayedMove(color, point) {
+function resign() {
+  if (state.monitoring || state.gameOver) return;
+  if (state.apiMode) {
+    resignApi();
+    return;
+  }
+  const color = state.turn;
+  recordDisplayedMove(color, null, "resign");
+  state.gameOver = true;
+  state.resignedBy = color === BLACK ? "black" : "white";
+  state.result = color === BLACK ? "W+R" : "B+R";
+  setMessage(`${colorName(color)} resigned`);
+  syncUi();
+  draw();
+}
+
+function recordDisplayedMove(color, point, moveLabelOverride = null) {
   const move = {
     number: state.moves.length + 1,
     player: color === WHITE ? "white" : "black",
-    move: point ? pointName(point.row, point.col) : "pass",
+    move: moveLabelOverride ?? (point ? pointName(point.row, point.col) : "pass"),
   };
   if (point) {
     move.row = point.row;
@@ -283,9 +312,10 @@ function refreshControls() {
   modeSelect.value = state.mode;
   modeSelect.disabled = active;
   boardSizeSelect.disabled = active;
-  passButton.disabled = watching || (playing && state.turn !== state.human);
+  passButton.disabled = state.gameOver || watching || (playing && state.turn !== state.human);
   undoButton.disabled = active;
   resetButton.disabled = active;
+  resignButton.disabled = state.gameOver || watching || (playing && state.turn !== state.human);
   startModeButton.disabled = active;
   stopModeButton.disabled = !active;
   monitorWorkerSelect.disabled = watching;
@@ -448,6 +478,19 @@ async function playApiMove(move) {
   }
 }
 
+async function resignApi() {
+  if (state.apiBusy || state.gameOver) return;
+  state.apiBusy = true;
+  try {
+    const data = await apiRequest("/api/resign", {});
+    applyApiData(data);
+  } catch (error) {
+    setMessage(error.message || "Resign failed", true);
+  } finally {
+    state.apiBusy = false;
+  }
+}
+
 async function apiRequest(path, payload) {
   const response = await fetch(path, {
     method: "POST",
@@ -471,6 +514,9 @@ function applyApiData(data) {
     [WHITE]: Number(data.captures?.white ?? 0),
   };
   state.moveCount = Number(data.move_count ?? 0);
+  state.gameOver = Boolean(data.is_over);
+  state.resignedBy = data.resigned_by ?? null;
+  state.result = data.result ?? null;
   state.moves = normalizeMoves(data.moves ?? [], state.size);
   state.history = apiHistory(data);
   state.modeTitle = `${data.black_player ?? "Black"} vs. ${data.white_player ?? "White"}`;
@@ -485,6 +531,8 @@ function apiHistory(data) {
   entries.push(...pairedMoveHistory(state.moves));
   if (data.is_over && typeof data.area_score === "number") {
     entries.push({ label: `Final area score B-W ${data.area_score.toFixed(1)}` });
+  } else if (data.is_over && data.result) {
+    entries.push({ label: `Result ${data.result}` });
   }
   return entries;
 }
@@ -528,6 +576,9 @@ function applyMonitorData(data) {
     [WHITE]: Number(data.captures?.white ?? 0),
   };
   state.moveCount = Number(data.move_count ?? 0);
+  state.gameOver = Boolean(data.is_over);
+  state.resignedBy = data.resigned_by ?? null;
+  state.result = data.result ?? null;
   state.hover = null;
   state.moves = normalizeMoves(data.moves ?? [], size);
   state.history = monitorHistory(data);
@@ -614,6 +665,13 @@ function normalizeMoves(moves, size) {
         player,
         move: `${move.move ?? "pass"}`,
       };
+      if (normalized.move.toLowerCase() === "resign") {
+        normalized.move = "resign";
+        if (typeof move.root_value === "number") {
+          normalized.root_value = move.root_value;
+        }
+        return normalized;
+      }
       const parsed = parsePointLabel(normalized.move, size);
       if (parsed) {
         normalized.row = parsed.row;
@@ -675,7 +733,11 @@ function writeSgf() {
     `KM[${KOMI_BY_SIZE[state.size].toFixed(1)}]`,
     "RU[CGOS/Tromp-Taylor]",
   ];
+  if (state.result) {
+    properties.push(`RE[${escapeSgfValue(state.result)}]`);
+  }
   const moves = state.moves
+    .filter((move) => move.move !== "resign")
     .map((move) => {
       const color = move.player === "white" ? "W" : "B";
       return `;${color}[${sgfPoint(move)}]`;
@@ -760,6 +822,9 @@ function snapshotState() {
     moves: state.moves.map((move) => ({ ...move })),
     hover: state.hover ? { ...state.hover } : null,
     moveCount: state.moveCount,
+    gameOver: state.gameOver,
+    resignedBy: state.resignedBy,
+    result: state.result,
     monitoring: state.monitoring,
     apiMode: state.apiMode,
     apiBusy: state.apiBusy,
@@ -820,6 +885,10 @@ function parseSgf(content) {
 
 function unescapeSgfValue(value) {
   return value.replace(/\\([\s\S])/g, "$1");
+}
+
+function escapeSgfValue(value) {
+  return `${value}`.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
 }
 
 function monitorMessage(data) {
@@ -932,6 +1001,7 @@ function drawStone(x, y, radius, color) {
 }
 
 function drawHover(padding, gap) {
+  if (state.gameOver) return;
   if (!state.hover) return;
   const { row, col } = state.hover;
   if (!inBounds(row, col) || state.board[row][col] !== EMPTY) return;
@@ -977,6 +1047,7 @@ boardSizeSelect.addEventListener("change", () => {
 
 passButton.addEventListener("click", pass);
 undoButton.addEventListener("click", undo);
+resignButton.addEventListener("click", resign);
 resetButton.addEventListener("click", () => {
   if (!state.monitoring && !state.apiMode) reset(state.size);
 });
