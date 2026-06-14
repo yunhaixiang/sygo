@@ -4,6 +4,12 @@ const boardSizeSelect = document.querySelector("#board-size");
 const passButton = document.querySelector("#pass-button");
 const undoButton = document.querySelector("#undo-button");
 const resetButton = document.querySelector("#reset-button");
+const playSygoButton = document.querySelector("#play-sygo-button");
+const stopPlayButton = document.querySelector("#stop-play-button");
+const watchButton = document.querySelector("#watch-button");
+const stopWatchButton = document.querySelector("#stop-watch-button");
+const monitorWorkerSelect = document.querySelector("#monitor-worker");
+const boardTitle = document.querySelector("#board-title");
 const turnLabel = document.querySelector("#turn-label");
 const moveCountLabel = document.querySelector("#move-count");
 const blackCapturesLabel = document.querySelector("#black-captures");
@@ -11,6 +17,7 @@ const whiteCapturesLabel = document.querySelector("#white-captures");
 const komiLabel = document.querySelector("#komi-label");
 const moveLog = document.querySelector("#move-log");
 const lastMessage = document.querySelector("#last-message");
+const monitorStatus = document.querySelector("#monitor-status");
 
 const EMPTY = 0;
 const BLACK = 1;
@@ -25,14 +32,26 @@ const KOMI_BY_SIZE = {
   13: 7.5,
   19: 7.5,
 };
+const MONITOR_URL = "../data/selfplay-monitor.json";
 
 const state = {
-  size: 19,
+  size: 9,
   board: [],
   turn: BLACK,
   captures: { [BLACK]: 0, [WHITE]: 0 },
   history: [],
   hover: null,
+  moveCount: null,
+  monitoring: false,
+  apiMode: false,
+  apiBusy: false,
+  human: BLACK,
+  monitorTimer: null,
+  monitorUpdatedAt: null,
+  monitorWorker: 1,
+  modeTitle: "Local Board",
+  supportedPlaySizes: [9],
+  defaultPlaySize: 9,
 };
 
 function createBoard(size) {
@@ -46,6 +65,10 @@ function reset(size = state.size) {
   state.captures = { [BLACK]: 0, [WHITE]: 0 };
   state.history = [];
   state.hover = null;
+  state.moveCount = null;
+  state.apiMode = false;
+  state.apiBusy = false;
+  state.modeTitle = "Local Board";
   setMessage("Black to play");
   syncUi();
   draw();
@@ -110,6 +133,11 @@ function cloneBoard(board) {
 }
 
 function playMove(row, col) {
+  if (state.monitoring) return;
+  if (state.apiMode) {
+    playApiMove({ row, col });
+    return;
+  }
   if (!inBounds(row, col) || state.board[row][col] !== EMPTY) {
     setMessage("Illegal move", true);
     return;
@@ -153,6 +181,11 @@ function playMove(row, col) {
 }
 
 function pass() {
+  if (state.monitoring) return;
+  if (state.apiMode) {
+    playApiMove({ pass: true });
+    return;
+  }
   const color = state.turn;
   state.history.push({
     board: cloneBoard(state.board),
@@ -167,6 +200,7 @@ function pass() {
 }
 
 function undo() {
+  if (state.monitoring || state.apiMode) return;
   const previous = state.history.pop();
   if (!previous) {
     setMessage("No move to undo", true);
@@ -186,8 +220,9 @@ function setMessage(message, isInvalid = false) {
 }
 
 function syncUi() {
+  boardTitle.textContent = state.modeTitle;
   turnLabel.textContent = colorName(state.turn);
-  moveCountLabel.textContent = `${state.history.length}`;
+  moveCountLabel.textContent = `${state.moveCount ?? state.history.length}`;
   blackCapturesLabel.textContent = `${state.captures[BLACK]}`;
   whiteCapturesLabel.textContent = `${state.captures[WHITE]}`;
   komiLabel.textContent = KOMI_BY_SIZE[state.size].toFixed(1);
@@ -199,6 +234,291 @@ function syncUi() {
     moveLog.append(li);
   }
   moveLog.scrollTop = moveLog.scrollHeight;
+}
+
+function setMonitoring(enabled) {
+  state.monitoring = enabled;
+  state.modeTitle = enabled ? "Sygo vs. Sygo" : "Local Board";
+  boardSizeSelect.disabled = enabled;
+  passButton.disabled = enabled;
+  undoButton.disabled = enabled;
+  resetButton.disabled = enabled;
+  playSygoButton.disabled = enabled;
+  stopPlayButton.disabled = enabled || !state.apiMode;
+  watchButton.disabled = enabled;
+  stopWatchButton.disabled = !enabled;
+  canvas.style.cursor = enabled ? "default" : "crosshair";
+}
+
+function startMonitoring() {
+  if (state.monitorTimer) clearInterval(state.monitorTimer);
+  state.monitorWorker = Number(monitorWorkerSelect.value);
+  setMonitoring(true);
+  monitorStatus.textContent = `Watching worker ${state.monitorWorker}`;
+  pollMonitor();
+  state.monitorTimer = window.setInterval(pollMonitor, 700);
+}
+
+function stopMonitoring() {
+  if (state.monitorTimer) clearInterval(state.monitorTimer);
+  state.monitorTimer = null;
+  state.monitorUpdatedAt = null;
+  setMonitoring(false);
+  monitorStatus.textContent = "Manual board";
+  state.modeTitle = "Local Board";
+  syncUi();
+}
+
+function setApiMode(enabled) {
+  state.apiMode = enabled;
+  state.modeTitle = enabled ? "User vs. Sygo" : "Local Board";
+  boardSizeSelect.disabled = enabled;
+  undoButton.disabled = enabled;
+  resetButton.disabled = enabled;
+  playSygoButton.disabled = enabled;
+  stopPlayButton.disabled = !enabled;
+  watchButton.disabled = enabled;
+  passButton.disabled = false;
+  canvas.style.cursor = "crosshair";
+  syncUi();
+}
+
+async function startSygoGame() {
+  stopMonitoring();
+  await loadPlayConfig();
+  const selectedSize = Number(boardSizeSelect.value);
+  const size = state.supportedPlaySizes.includes(selectedSize) ? selectedSize : state.defaultPlaySize;
+  boardSizeSelect.value = `${size}`;
+  reset(size);
+  setMessage("Starting Sygo game");
+  try {
+    const data = await apiRequest("/api/new", {
+      size,
+      human: "black",
+    });
+    setApiMode(true);
+    applyApiData(data);
+  } catch {
+    setMessage("Start with sygo-play, not python -m http.server", true);
+  }
+}
+
+function stopSygoGame() {
+  state.apiBusy = false;
+  setApiMode(false);
+  reset(state.defaultPlaySize);
+  boardSizeSelect.value = `${state.defaultPlaySize}`;
+  setMessage("Stopped game");
+}
+
+async function loadPlayConfig() {
+  try {
+    const response = await fetch("/api/config", { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    const supported = (data.supported_sizes ?? []).map((value) => Number(value));
+    if (supported.length > 0) {
+      state.supportedPlaySizes = supported;
+      state.defaultPlaySize = Number(data.default_size ?? supported[0]);
+      setBoardSizeOptions(supported, state.defaultPlaySize);
+    }
+  } catch {
+    state.supportedPlaySizes = [9];
+    state.defaultPlaySize = 9;
+  }
+}
+
+function setBoardSizeOptions(sizes, selectedSize) {
+  for (const option of boardSizeSelect.options) {
+    const value = Number(option.value);
+    option.disabled = !sizes.includes(value);
+  }
+  boardSizeSelect.value = `${selectedSize}`;
+}
+
+async function playApiMove(move) {
+  if (state.apiBusy || state.turn !== state.human) return;
+  state.apiBusy = true;
+  setMessage("Sygo thinking");
+  try {
+    const data = await apiRequest("/api/play", move);
+    applyApiData(data);
+  } catch (error) {
+    setMessage(error.message || "Move failed", true);
+  } finally {
+    state.apiBusy = false;
+  }
+}
+
+async function apiRequest(path, payload) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "API request failed");
+  }
+  return data;
+}
+
+function applyApiData(data) {
+  state.size = Number(data.size);
+  state.board = data.board.map((row) => row.map((value) => Number(value)));
+  state.turn = data.to_play === "white" ? WHITE : BLACK;
+  state.human = data.human === "white" ? WHITE : BLACK;
+  state.captures = {
+    [BLACK]: Number(data.captures?.black ?? 0),
+    [WHITE]: Number(data.captures?.white ?? 0),
+  };
+  state.moveCount = Number(data.move_count ?? 0);
+  state.history = apiHistory(data);
+  state.modeTitle = `${data.black_player ?? "Black"} vs. ${data.white_player ?? "White"}`;
+  boardSizeSelect.value = `${state.size}`;
+  setMessage(data.message ?? (state.turn === state.human ? "Your move" : "Sygo to play"));
+  syncUi();
+  draw();
+}
+
+function apiHistory(data) {
+  const entries = [];
+  entries.push(...pairedMoveHistory(data.moves ?? []));
+  if (data.is_over && typeof data.area_score === "number") {
+    entries.push({ label: `Final area score B-W ${data.area_score.toFixed(1)}` });
+  }
+  return entries;
+}
+
+async function pollMonitor() {
+  try {
+    const response = await fetchMonitor();
+    if (!response.ok) {
+      monitorStatus.textContent = `Waiting for worker ${state.monitorWorker}`;
+      return;
+    }
+    const data = await response.json();
+    if (data.updated_at === state.monitorUpdatedAt) return;
+    state.monitorUpdatedAt = data.updated_at;
+    applyMonitorData(data);
+  } catch {
+    monitorStatus.textContent = `Waiting for worker ${state.monitorWorker}`;
+  }
+}
+
+async function fetchMonitor() {
+  const timestamp = Date.now();
+  const workerUrl = monitorUrlForWorker(state.monitorWorker);
+  const response = await fetch(`${workerUrl}?t=${timestamp}`, { cache: "no-store" });
+  if (response.ok || state.monitorWorker !== 1) return response;
+  return fetch(`${MONITOR_URL}?t=${timestamp}`, { cache: "no-store" });
+}
+
+function monitorUrlForWorker(worker) {
+  return `../data/selfplay-monitor-worker${worker}.json`;
+}
+
+function applyMonitorData(data) {
+  if (!Array.isArray(data.board) || data.board.length === 0) return;
+  const size = Number(data.size ?? data.board.length);
+  state.size = size;
+  state.board = data.board.map((row) => row.map((value) => Number(value)));
+  state.turn = data.to_play === "white" ? WHITE : BLACK;
+  state.captures = {
+    [BLACK]: Number(data.captures?.black ?? 0),
+    [WHITE]: Number(data.captures?.white ?? 0),
+  };
+  state.moveCount = Number(data.move_count ?? 0);
+  state.hover = null;
+  state.history = monitorHistory(data);
+  state.modeTitle = monitorTitle(data);
+  boardSizeSelect.value = `${size}`;
+
+  const round = data.round ? `Round ${data.round}${data.rounds ? `/${data.rounds}` : ""}` : null;
+  const game = data.game ? `Game ${data.game}${data.games ? `/${data.games}` : ""}` : null;
+  const prefix = [round, game].filter(Boolean).join(" ");
+  const worker = data.worker ? `Worker ${data.worker}${data.workers ? `/${data.workers}` : ""}` : null;
+  const phase = data.is_over ? "finished" : "self-play";
+  monitorStatus.textContent = [worker, prefix, phase].filter(Boolean).join(" - ");
+  setMessage(monitorMessage(data));
+  syncUi();
+  draw();
+}
+
+function monitorTitle(data) {
+  if (data.black_player || data.white_player) {
+    return `${data.black_player ?? "Black"} vs. ${data.white_player ?? "White"}`;
+  }
+  return "Sygo vs. Sygo";
+}
+
+function monitorHistory(data) {
+  const entries = [];
+  const round = data.round ? `Round ${data.round}` : null;
+  const game = data.game ? `Game ${data.game}` : null;
+  if (round || game) {
+    entries.push({ label: [round, game].filter(Boolean).join(", ") });
+  }
+
+  if (Array.isArray(data.moves) && data.moves.length > 0) {
+    entries.push(...pairedMoveHistory(data.moves, { includeValues: true }));
+  } else if (data.move) {
+    const player = data.played_by === "white" ? "White" : "Black";
+    entries.push({ label: `${player} ${data.move}` });
+  } else {
+    entries.push({ label: "Starting position" });
+  }
+  if (data.is_over && typeof data.area_score === "number") {
+    entries.push({ label: `Final area score B-W ${data.area_score.toFixed(1)}` });
+  }
+  return entries;
+}
+
+function pairedMoveHistory(moves, options = {}) {
+  const includeValues = Boolean(options.includeValues);
+  const turns = [];
+  const byTurn = new Map();
+
+  for (const move of moves) {
+    const number = Number(move.number);
+    if (!Number.isFinite(number) || !move.move) continue;
+
+    const turnNumber = Math.floor((number + 1) / 2);
+    if (!byTurn.has(turnNumber)) {
+      const turn = { number: turnNumber, black: null, white: null };
+      byTurn.set(turnNumber, turn);
+      turns.push(turn);
+    }
+
+    const label = moveLabel(move, includeValues);
+    if (move.player === "white") {
+      byTurn.get(turnNumber).white = label;
+    } else {
+      byTurn.get(turnNumber).black = label;
+    }
+  }
+
+  return turns.map((turn) => {
+    const black = turn.black ? `B ${turn.black}` : "B ...";
+    const white = turn.white ? `W ${turn.white}` : "";
+    return { label: [black, white].filter(Boolean).join("   ") };
+  });
+}
+
+function moveLabel(move, includeValue) {
+  if (!includeValue || typeof move.root_value !== "number") return move.move;
+  return `${move.move} (${move.root_value.toFixed(3)})`;
+}
+
+function monitorMessage(data) {
+  if (data.is_over) {
+    return `Game finished, area score B-W ${Number(data.area_score ?? 0).toFixed(1)}`;
+  }
+  if (data.move) {
+    const player = data.played_by === "white" ? "White" : "Black";
+    return `${player} played ${data.move}`;
+  }
+  return `${colorName(state.turn)} to play`;
 }
 
 function boardMetrics() {
@@ -339,12 +659,28 @@ canvas.addEventListener("mouseleave", () => {
 });
 
 boardSizeSelect.addEventListener("change", () => {
+  if (state.monitoring || state.apiMode) return;
   reset(Number(boardSizeSelect.value));
 });
 
 passButton.addEventListener("click", pass);
 undoButton.addEventListener("click", undo);
-resetButton.addEventListener("click", () => reset(state.size));
+resetButton.addEventListener("click", () => {
+  if (!state.monitoring && !state.apiMode) reset(state.size);
+});
+playSygoButton.addEventListener("click", startSygoGame);
+stopPlayButton.addEventListener("click", stopSygoGame);
+watchButton.addEventListener("click", startMonitoring);
+stopWatchButton.addEventListener("click", stopMonitoring);
+monitorWorkerSelect.addEventListener("change", () => {
+  state.monitorWorker = Number(monitorWorkerSelect.value);
+  state.monitorUpdatedAt = null;
+  if (state.monitoring) {
+    monitorStatus.textContent = `Watching worker ${state.monitorWorker}`;
+    pollMonitor();
+  }
+});
 window.addEventListener("resize", draw);
 
 reset();
+setMonitoring(false);

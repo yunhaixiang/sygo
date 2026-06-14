@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from sygo.engine.board import Move
 
 
-@dataclass(slots=True)
+@dataclass
 class GameRecord:
     """A parsed or generated Go game record."""
 

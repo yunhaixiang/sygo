@@ -141,10 +141,39 @@ select {
   padding: 10px 12px;
 }
 
-.button-row {
+.button-row,
+.play-row,
+.monitor-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+
+.button-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.play-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.monitor-row {
+  grid-template-columns: minmax(0, 1fr) 72px 56px 86px;
+  align-items: center;
+}
+
+.monitor-row label {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.monitor-row select {
+  min-width: 0;
+}
+
+.monitor-row span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 button {
@@ -159,6 +188,12 @@ button {
 
 button:hover {
   border-color: rgba(45, 108, 223, 0.7);
+}
+
+button:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 button:active {

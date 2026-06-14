@@ -7,7 +7,7 @@ name = "sygo"
 version = "0.1.0"
 description = "A from-scratch Go AI project with GTP, SGF, PyTorch training, and neurosymbolic experiments."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 authors = [{ name = "Sygo contributors" }]
 dependencies = []
 
@@ -17,14 +17,16 @@ dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
 
 [project.scripts]
 sygo-gtp = "sygo.engine.gtp:main"
+sygo-train = "sygo.ai.training:train"
+sygo-play = "sygo.play_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py39"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.9"
 strict = true

@@ -15,7 +15,7 @@
       <aside class="side-panel" aria-label="Game controls">
         <header>
           <p class="eyebrow">Sygo</p>
-          <h1>Go Workbench</h1>
+          <h1 id="board-title">Local Board</h1>
         </header>
 
         <div class="status-grid">
@@ -48,9 +48,9 @@
         <div class="control-group">
           <label for="board-size">Board size</label>
           <select id="board-size">
-            <option value="19" selected>19 x 19</option>
+            <option value="19">19 x 19</option>
             <option value="13">13 x 13</option>
-            <option value="9">9 x 9</option>
+            <option value="9" selected>9 x 9</option>
           </select>
         </div>
 
@@ -58,6 +58,36 @@
           <button id="pass-button" type="button">Pass</button>
           <button id="undo-button" type="button">Undo</button>
           <button id="reset-button" type="button">Reset</button>
+        </div>
+
+        <div class="play-row">
+          <button id="play-sygo-button" type="button">Play Sygo</button>
+          <button id="stop-play-button" type="button">Stop game</button>
+        </div>
+
+        <div class="monitor-row">
+          <button id="watch-button" type="button">Watch self-play</button>
+          <button id="stop-watch-button" type="button">Stop</button>
+          <label for="monitor-worker">Worker</label>
+          <select id="monitor-worker">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+            <option value="11">11</option>
+            <option value="12">12</option>
+            <option value="13">13</option>
+            <option value="14">14</option>
+            <option value="15">15</option>
+            <option value="16">16</option>
+          </select>
+          <span id="monitor-status">Manual board</span>
         </div>
 
         <section class="log-panel" aria-label="Move log">

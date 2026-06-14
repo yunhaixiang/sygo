@@ -19,7 +19,7 @@ class KoRule(str, Enum):
     POSITIONAL_SUPERKO = "positional_superko"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class Ruleset:
     """Concrete Go rules used by a game."""
 
