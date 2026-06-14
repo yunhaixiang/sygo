@@ -154,3 +154,15 @@ Use the GUI `Worker` selector to choose which self-play worker to watch. You can
 ```bash
 PYTHONPATH=src python -m sygo.ai.training cycle --rounds 3 --games-per-round 20 --monitor-path data/selfplay-monitor.json
 ```
+
+On a cluster, you can print monitor updates and ASCII boards directly in the terminal without running the browser GUI:
+
+```bash
+python scripts/monitor_selfplay.py "$SCRATCH/sygo-runs/594065/data/selfplay-monitor*.json"
+```
+
+Use `--compact` for one-line summaries without boards:
+
+```bash
+python scripts/monitor_selfplay.py --compact "$SCRATCH/sygo-runs/594065/data/selfplay-monitor*.json"
+```
