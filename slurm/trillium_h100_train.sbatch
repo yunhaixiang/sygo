@@ -1,22 +1,19 @@
 #!/bin/bash
 #SBATCH --job-name=sygo-9x9-h100
-#SBATCH --account=YOUR_ACCOUNT_HERE
 #SBATCH --time=12:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=10
-#SBATCH --gres=gpu:1
+#SBATCH --gpus-per-node=h100:1
 #SBATCH --mem=64G
 #SBATCH --output=logs/%x-%j.out
 #SBATCH --error=logs/%x-%j.err
 
 set -euo pipefail
 
-# If your allocation requires a partition/QOS or a constraint to land on H100
-# nodes, add the appropriate lines, e.g.:
+# If your allocation requires a partition/QOS, add the appropriate lines, e.g.:
 #   #SBATCH --partition=...
 #   #SBATCH --qos=...
-#   #SBATCH --constraint=...
 
 module purge
 

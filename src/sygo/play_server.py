@@ -39,6 +39,9 @@ class PlaySession:
     evaluator: Evaluator
     simulations: int
     supported_sizes: list[int]
+    device: str = "cpu"
+    checkpoint_dir: Path = Path("checkpoints")
+    current_checkpoint: str | None = None
     min_pass_moves: int | None = None
     pass_allowed_empty_points: int | None = None
     pass_prior_scale: float | None = None
@@ -46,6 +49,7 @@ class PlaySession:
     human: Color = Color.BLACK
     state: GameState = field(default_factory=lambda: GameState(size=9))
     moves: list[dict[str, Any]] = field(default_factory=list)
+    model_cache: dict[str, PlayModel] = field(default_factory=dict)
 
     @property
     def ai(self) -> Color:
@@ -59,13 +63,31 @@ class PlaySession:
         return {
             "supported_sizes": self.supported_sizes,
             "default_size": self.default_size,
+            "current_checkpoint": self.current_checkpoint,
+            "checkpoints": self.available_checkpoints(),
         }
 
-    def new_game(self, *, size: int | None = None, human: Color = Color.BLACK) -> dict[str, Any]:
+    def available_checkpoints(self) -> list[dict[str, str]]:
+        if not self.checkpoint_dir.exists():
+            return []
+        return [
+            {"id": path.name, "label": path.name}
+            for path in sorted(self.checkpoint_dir.glob("*.pt"))
+            if path.is_file()
+        ]
+
+    def new_game(
+        self,
+        *,
+        size: int | None = None,
+        human: Color = Color.BLACK,
+        checkpoint: str | None = None,
+    ) -> dict[str, Any]:
+        if checkpoint is not None:
+            self.set_model(checkpoint)
         size = size or self.default_size
         if size not in self.supported_sizes:
-            supported = ", ".join(str(value) for value in self.supported_sizes)
-            raise ValueError(f"Sygo play supports board sizes: {supported}.")
+            size = self.default_size
         self.size = size
         self.human = human
         self.state = GameState(size=size)
@@ -73,6 +95,32 @@ class PlaySession:
         if self.state.to_play is self.ai:
             self._play_ai_move()
         return self.payload("New game")
+
+    def set_model(self, checkpoint_id: str | None) -> None:
+        if not checkpoint_id:
+            self.evaluator = UniformEvaluator()
+            self.supported_sizes = [9, 13, 19]
+            self.current_checkpoint = None
+            return
+
+        checkpoint_path = self._resolve_checkpoint(checkpoint_id)
+        if checkpoint_path.name not in self.model_cache:
+            self.model_cache[checkpoint_path.name] = build_play_model(checkpoint_path, self.device)
+        play_model = self.model_cache[checkpoint_path.name]
+        self.evaluator = play_model.evaluator
+        self.supported_sizes = play_model.supported_sizes
+        self.current_checkpoint = checkpoint_path.name
+
+    def _resolve_checkpoint(self, checkpoint_id: str) -> Path:
+        checkpoint_dir = self.checkpoint_dir.resolve()
+        checkpoint_path = (checkpoint_dir / checkpoint_id).resolve()
+        try:
+            checkpoint_path.relative_to(checkpoint_dir)
+        except ValueError as exc:
+            raise ValueError("Checkpoint must be inside the configured checkpoint directory.") from exc
+        if checkpoint_path.suffix != ".pt" or not checkpoint_path.is_file():
+            raise ValueError(f"Unknown checkpoint: {checkpoint_id}")
+        return checkpoint_path
 
     def play_human(self, point: Point | None) -> dict[str, Any]:
         if self.state.is_over:
@@ -177,7 +225,10 @@ class PlayRequestHandler(SimpleHTTPRequestHandler):
                 payload = self._read_json()
                 size = int(payload.get("size", 9))
                 human = Color(payload.get("human", "black"))
-                self._send_json(self.session.new_game(size=size, human=human))
+                checkpoint = payload.get("checkpoint")
+                self._send_json(
+                    self.session.new_game(size=size, human=human, checkpoint=checkpoint)
+                )
             elif self.path == "/api/play":
                 payload = self._read_json()
                 point = None if payload.get("pass") else Point(int(payload["row"]), int(payload["col"]))
@@ -221,6 +272,7 @@ def build_play_model(checkpoint: Path | None, device: str) -> PlayModel:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="sygo-play")
     parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints"))
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
@@ -250,6 +302,9 @@ def main() -> None:
     session = PlaySession(
         evaluator=play_model.evaluator,
         supported_sizes=play_model.supported_sizes,
+        device=args.device,
+        checkpoint_dir=args.checkpoint_dir,
+        current_checkpoint=args.checkpoint.name if args.checkpoint is not None else None,
         simulations=args.simulations,
         min_pass_moves=args.min_pass_moves,
         pass_allowed_empty_points=args.pass_allowed_empty_points,

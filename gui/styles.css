@@ -74,7 +74,8 @@ select {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  overflow: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   box-shadow: 0 10px 30px rgba(67, 52, 25, 0.1);
 }
 
@@ -142,8 +143,9 @@ select {
 }
 
 .button-row,
-.play-row,
-.monitor-row {
+.mode-row,
+.monitor-row,
+.sgf-row {
   display: grid;
   gap: 8px;
 }
@@ -152,12 +154,13 @@ select {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.play-row {
+.mode-row,
+.sgf-row {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .monitor-row {
-  grid-template-columns: minmax(0, 1fr) 72px 56px 86px;
+  grid-template-columns: 64px minmax(0, 1fr);
   align-items: center;
 }
 
@@ -174,6 +177,10 @@ select {
   grid-column: 1 / -1;
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+#load-sgf-input {
+  display: none;
 }
 
 button {

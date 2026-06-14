@@ -1,14 +1,17 @@
 const canvas = document.querySelector("#go-board");
 const ctx = canvas.getContext("2d");
 const boardSizeSelect = document.querySelector("#board-size");
+const modeSelect = document.querySelector("#board-mode");
+const checkpointSelect = document.querySelector("#checkpoint-select");
 const passButton = document.querySelector("#pass-button");
 const undoButton = document.querySelector("#undo-button");
 const resetButton = document.querySelector("#reset-button");
-const playSygoButton = document.querySelector("#play-sygo-button");
-const stopPlayButton = document.querySelector("#stop-play-button");
-const watchButton = document.querySelector("#watch-button");
-const stopWatchButton = document.querySelector("#stop-watch-button");
+const startModeButton = document.querySelector("#start-mode-button");
+const stopModeButton = document.querySelector("#stop-mode-button");
 const monitorWorkerSelect = document.querySelector("#monitor-worker");
+const loadSgfInput = document.querySelector("#load-sgf-input");
+const loadSgfButton = document.querySelector("#load-sgf-button");
+const saveSgfButton = document.querySelector("#save-sgf-button");
 const boardTitle = document.querySelector("#board-title");
 const turnLabel = document.querySelector("#turn-label");
 const moveCountLabel = document.querySelector("#move-count");
@@ -40,6 +43,8 @@ const state = {
   turn: BLACK,
   captures: { [BLACK]: 0, [WHITE]: 0 },
   history: [],
+  undoStack: [],
+  moves: [],
   hover: null,
   moveCount: null,
   monitoring: false,
@@ -49,9 +54,11 @@ const state = {
   monitorTimer: null,
   monitorUpdatedAt: null,
   monitorWorker: 1,
+  mode: "local",
   modeTitle: "Local Board",
   supportedPlaySizes: [9],
   defaultPlaySize: 9,
+  checkpoints: [],
 };
 
 function createBoard(size) {
@@ -64,11 +71,15 @@ function reset(size = state.size) {
   state.turn = BLACK;
   state.captures = { [BLACK]: 0, [WHITE]: 0 };
   state.history = [];
+  state.undoStack = [];
+  state.moves = [];
   state.hover = null;
   state.moveCount = null;
   state.apiMode = false;
   state.apiBusy = false;
+  state.mode = "local";
   state.modeTitle = "Local Board";
+  modeSelect.value = "local";
   setMessage("Black to play");
   syncUi();
   draw();
@@ -83,8 +94,12 @@ function colorName(color) {
 }
 
 function pointName(row, col) {
+  return pointNameForSize(row, col, state.size);
+}
+
+function pointNameForSize(row, col, size) {
   const letters = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
-  return `${letters[col]}${state.size - row}`;
+  return `${letters[col]}${size - row}`;
 }
 
 function inBounds(row, col) {
@@ -132,15 +147,15 @@ function cloneBoard(board) {
   return board.map((row) => row.slice());
 }
 
-function playMove(row, col) {
-  if (state.monitoring) return;
-  if (state.apiMode) {
+function playMove(row, col, options = {}) {
+  if (state.monitoring) return false;
+  if (state.apiMode && !options.localOnly) {
     playApiMove({ row, col });
-    return;
+    return true;
   }
   if (!inBounds(row, col) || state.board[row][col] !== EMPTY) {
     setMessage("Illegal move", true);
-    return;
+    return false;
   }
 
   const board = cloneBoard(state.board);
@@ -163,45 +178,51 @@ function playMove(row, col) {
   const ownGroup = collectGroup(board, row, col);
   if (ownGroup.liberties.size === 0) {
     setMessage("Suicide is not allowed", true);
-    return;
+    return false;
   }
 
-  state.history.push({
+  state.undoStack.push({
     board: cloneBoard(state.board),
     turn: state.turn,
     captures: { ...state.captures },
-    label: `${colorName(color)} ${pointName(row, col)}`,
   });
   state.board = board;
   state.captures[color] += captured.length;
   state.turn = rival;
-  setMessage(`${colorName(color)} played ${pointName(row, col)}`);
+  recordDisplayedMove(color, { row, col });
+  if (!options.silent) {
+    setMessage(`${colorName(color)} played ${pointName(row, col)}`);
+  }
   syncUi();
   draw();
+  return true;
 }
 
-function pass() {
-  if (state.monitoring) return;
-  if (state.apiMode) {
+function pass(options = {}) {
+  if (state.monitoring) return false;
+  if (state.apiMode && !options.localOnly) {
     playApiMove({ pass: true });
-    return;
+    return true;
   }
   const color = state.turn;
-  state.history.push({
+  state.undoStack.push({
     board: cloneBoard(state.board),
     turn: state.turn,
     captures: { ...state.captures },
-    label: `${colorName(color)} pass`,
   });
   state.turn = opponent(color);
-  setMessage(`${colorName(color)} passed`);
+  recordDisplayedMove(color, null);
+  if (!options.silent) {
+    setMessage(`${colorName(color)} passed`);
+  }
   syncUi();
   draw();
+  return true;
 }
 
 function undo() {
   if (state.monitoring || state.apiMode) return;
-  const previous = state.history.pop();
+  const previous = state.undoStack.pop();
   if (!previous) {
     setMessage("No move to undo", true);
     return;
@@ -209,9 +230,27 @@ function undo() {
   state.board = previous.board;
   state.turn = previous.turn;
   state.captures = previous.captures;
+  state.moves.pop();
+  state.history = pairedMoveHistory(state.moves);
+  state.moveCount = state.moves.length;
   setMessage("Move undone");
   syncUi();
   draw();
+}
+
+function recordDisplayedMove(color, point) {
+  const move = {
+    number: state.moves.length + 1,
+    player: color === WHITE ? "white" : "black",
+    move: point ? pointName(point.row, point.col) : "pass",
+  };
+  if (point) {
+    move.row = point.row;
+    move.col = point.col;
+  }
+  state.moves.push(move);
+  state.history = pairedMoveHistory(state.moves);
+  state.moveCount = state.moves.length;
 }
 
 function setMessage(message, isInvalid = false) {
@@ -222,7 +261,7 @@ function setMessage(message, isInvalid = false) {
 function syncUi() {
   boardTitle.textContent = state.modeTitle;
   turnLabel.textContent = colorName(state.turn);
-  moveCountLabel.textContent = `${state.moveCount ?? state.history.length}`;
+  moveCountLabel.textContent = `${state.moveCount ?? state.moves.length}`;
   blackCapturesLabel.textContent = `${state.captures[BLACK]}`;
   whiteCapturesLabel.textContent = `${state.captures[WHITE]}`;
   komiLabel.textContent = KOMI_BY_SIZE[state.size].toFixed(1);
@@ -234,20 +273,31 @@ function syncUi() {
     moveLog.append(li);
   }
   moveLog.scrollTop = moveLog.scrollHeight;
+  refreshControls();
+}
+
+function refreshControls() {
+  const active = state.monitoring || state.apiMode;
+  const watching = state.monitoring;
+  const playing = state.apiMode;
+  modeSelect.value = state.mode;
+  modeSelect.disabled = active;
+  boardSizeSelect.disabled = active;
+  passButton.disabled = watching || (playing && state.turn !== state.human);
+  undoButton.disabled = active;
+  resetButton.disabled = active;
+  startModeButton.disabled = active;
+  stopModeButton.disabled = !active;
+  monitorWorkerSelect.disabled = watching;
+  checkpointSelect.disabled = active;
+  canvas.style.cursor = watching ? "default" : "crosshair";
 }
 
 function setMonitoring(enabled) {
   state.monitoring = enabled;
+  state.mode = enabled ? "watch" : "local";
   state.modeTitle = enabled ? "Sygo vs. Sygo" : "Local Board";
-  boardSizeSelect.disabled = enabled;
-  passButton.disabled = enabled;
-  undoButton.disabled = enabled;
-  resetButton.disabled = enabled;
-  playSygoButton.disabled = enabled;
-  stopPlayButton.disabled = enabled || !state.apiMode;
-  watchButton.disabled = enabled;
-  stopWatchButton.disabled = !enabled;
-  canvas.style.cursor = enabled ? "default" : "crosshair";
+  refreshControls();
 }
 
 function startMonitoring() {
@@ -271,15 +321,9 @@ function stopMonitoring() {
 
 function setApiMode(enabled) {
   state.apiMode = enabled;
+  state.mode = enabled ? "play" : "local";
   state.modeTitle = enabled ? "User vs. Sygo" : "Local Board";
-  boardSizeSelect.disabled = enabled;
-  undoButton.disabled = enabled;
-  resetButton.disabled = enabled;
-  playSygoButton.disabled = enabled;
-  stopPlayButton.disabled = !enabled;
-  watchButton.disabled = enabled;
-  passButton.disabled = false;
-  canvas.style.cursor = "crosshair";
+  refreshControls();
   syncUi();
 }
 
@@ -295,20 +339,49 @@ async function startSygoGame() {
     const data = await apiRequest("/api/new", {
       size,
       human: "black",
+      checkpoint: checkpointSelect.value,
     });
     setApiMode(true);
     applyApiData(data);
-  } catch {
-    setMessage("Start with sygo-play, not python -m http.server", true);
+  } catch (error) {
+    setMessage(error.message || "Start with sygo-play, not python -m http.server", true);
   }
 }
 
 function stopSygoGame() {
   state.apiBusy = false;
   setApiMode(false);
-  reset(state.defaultPlaySize);
-  boardSizeSelect.value = `${state.defaultPlaySize}`;
+  state.modeTitle = "Local Board";
+  modeSelect.value = "local";
   setMessage("Stopped game");
+  syncUi();
+}
+
+async function startSelectedMode() {
+  const mode = modeSelect.value;
+  if (mode === "play") {
+    await startSygoGame();
+    return;
+  }
+  if (mode === "watch") {
+    stopSygoGame();
+    startMonitoring();
+    return;
+  }
+  stopMonitoring();
+  stopSygoGame();
+  reset(Number(boardSizeSelect.value));
+}
+
+function stopActiveMode() {
+  if (state.monitoring) {
+    stopMonitoring();
+    setMessage("Stopped self-play watch");
+    return;
+  }
+  if (state.apiMode) {
+    stopSygoGame();
+  }
 }
 
 async function loadPlayConfig() {
@@ -322,9 +395,13 @@ async function loadPlayConfig() {
       state.defaultPlaySize = Number(data.default_size ?? supported[0]);
       setBoardSizeOptions(supported, state.defaultPlaySize);
     }
+    state.checkpoints = data.checkpoints ?? [];
+    setCheckpointOptions(state.checkpoints, data.current_checkpoint ?? "");
   } catch {
     state.supportedPlaySizes = [9];
     state.defaultPlaySize = 9;
+    state.checkpoints = [];
+    setCheckpointOptions([], "");
   }
 }
 
@@ -334,6 +411,27 @@ function setBoardSizeOptions(sizes, selectedSize) {
     option.disabled = !sizes.includes(value);
   }
   boardSizeSelect.value = `${selectedSize}`;
+}
+
+function setCheckpointOptions(checkpoints, selectedCheckpoint) {
+  const previous = checkpointSelect.value;
+  checkpointSelect.replaceChildren();
+
+  const uniformOption = document.createElement("option");
+  uniformOption.value = "";
+  uniformOption.textContent = "Uniform test evaluator";
+  checkpointSelect.append(uniformOption);
+
+  for (const checkpoint of checkpoints) {
+    const option = document.createElement("option");
+    option.value = checkpoint.id;
+    option.textContent = checkpoint.label;
+    checkpointSelect.append(option);
+  }
+
+  const ids = new Set(checkpoints.map((checkpoint) => checkpoint.id));
+  const nextValue = previous && ids.has(previous) ? previous : selectedCheckpoint;
+  checkpointSelect.value = ids.has(nextValue) ? nextValue : "";
 }
 
 async function playApiMove(move) {
@@ -373,6 +471,7 @@ function applyApiData(data) {
     [WHITE]: Number(data.captures?.white ?? 0),
   };
   state.moveCount = Number(data.move_count ?? 0);
+  state.moves = normalizeMoves(data.moves ?? [], state.size);
   state.history = apiHistory(data);
   state.modeTitle = `${data.black_player ?? "Black"} vs. ${data.white_player ?? "White"}`;
   boardSizeSelect.value = `${state.size}`;
@@ -383,7 +482,7 @@ function applyApiData(data) {
 
 function apiHistory(data) {
   const entries = [];
-  entries.push(...pairedMoveHistory(data.moves ?? []));
+  entries.push(...pairedMoveHistory(state.moves));
   if (data.is_over && typeof data.area_score === "number") {
     entries.push({ label: `Final area score B-W ${data.area_score.toFixed(1)}` });
   }
@@ -430,6 +529,7 @@ function applyMonitorData(data) {
   };
   state.moveCount = Number(data.move_count ?? 0);
   state.hover = null;
+  state.moves = normalizeMoves(data.moves ?? [], size);
   state.history = monitorHistory(data);
   state.modeTitle = monitorTitle(data);
   boardSizeSelect.value = `${size}`;
@@ -461,7 +561,7 @@ function monitorHistory(data) {
   }
 
   if (Array.isArray(data.moves) && data.moves.length > 0) {
-    entries.push(...pairedMoveHistory(data.moves, { includeValues: true }));
+    entries.push(...pairedMoveHistory(state.moves, { includeValues: true }));
   } else if (data.move) {
     const player = data.played_by === "white" ? "White" : "Black";
     entries.push({ label: `${player} ${data.move}` });
@@ -505,9 +605,221 @@ function pairedMoveHistory(moves, options = {}) {
   });
 }
 
+function normalizeMoves(moves, size) {
+  return moves
+    .map((move, index) => {
+      const player = move.player === "white" ? "white" : "black";
+      const normalized = {
+        number: Number(move.number ?? index + 1),
+        player,
+        move: `${move.move ?? "pass"}`,
+      };
+      const parsed = parsePointLabel(normalized.move, size);
+      if (parsed) {
+        normalized.row = parsed.row;
+        normalized.col = parsed.col;
+        normalized.move = pointNameForSize(parsed.row, parsed.col, size);
+      } else {
+        normalized.move = "pass";
+      }
+      if (typeof move.root_value === "number") {
+        normalized.root_value = move.root_value;
+      }
+      return normalized;
+    })
+    .filter((move) => Number.isFinite(move.number));
+}
+
+function parsePointLabel(label, size) {
+  if (!label || label.toLowerCase() === "pass") return null;
+  const match = /^([A-HJ-Z])(\d+)$/i.exec(label.trim());
+  if (!match) return null;
+  const letters = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
+  const col = letters.indexOf(match[1].toUpperCase());
+  const row = size - Number(match[2]);
+  if (!inBoundsForSize(row, col, size)) return null;
+  return { row, col };
+}
+
+function inBoundsForSize(row, col, size) {
+  return row >= 0 && row < size && col >= 0 && col < size;
+}
+
 function moveLabel(move, includeValue) {
   if (!includeValue || typeof move.root_value !== "number") return move.move;
   return `${move.move} (${move.root_value.toFixed(3)})`;
+}
+
+function saveSgf() {
+  const sgf = writeSgf();
+  const blob = new Blob([sgf], { type: "application/x-go-sgf;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  link.href = url;
+  link.download = `sygo-${state.size}x${state.size}-${timestamp}.sgf`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  setMessage("SGF saved");
+}
+
+function writeSgf() {
+  const properties = [
+    "GM[1]",
+    "FF[4]",
+    "CA[UTF-8]",
+    "AP[Sygo]",
+    `SZ[${state.size}]`,
+    `KM[${KOMI_BY_SIZE[state.size].toFixed(1)}]`,
+    "RU[CGOS/Tromp-Taylor]",
+  ];
+  const moves = state.moves
+    .map((move) => {
+      const color = move.player === "white" ? "W" : "B";
+      return `;${color}[${sgfPoint(move)}]`;
+    })
+    .join("");
+  return `(;${properties.join("")}${moves})\n`;
+}
+
+function sgfPoint(move) {
+  if (move.move === "pass") return "";
+  const row = Number.isInteger(move.row) ? move.row : parsePointLabel(move.move, state.size)?.row;
+  const col = Number.isInteger(move.col) ? move.col : parsePointLabel(move.move, state.size)?.col;
+  if (!inBoundsForSize(row, col, state.size)) return "";
+  return `${String.fromCharCode(97 + col)}${String.fromCharCode(97 + row)}`;
+}
+
+function promptLoadSgf() {
+  loadSgfInput.value = "";
+  loadSgfInput.click();
+}
+
+async function loadSgfFile() {
+  const file = loadSgfInput.files?.[0];
+  if (!file) return;
+  try {
+    const content = await file.text();
+    loadSgf(content, file.name);
+  } catch (error) {
+    setMessage(error.message || "Could not load SGF", true);
+  }
+}
+
+function loadSgf(content, name = "SGF") {
+  const snapshot = snapshotState();
+  const record = parseSgf(content);
+  try {
+    stopMonitoring();
+    stopSygoGame();
+    reset(record.size);
+    boardSizeSelect.value = `${record.size}`;
+    state.modeTitle = name.replace(/\.sgf$/i, "") || "Loaded SGF";
+
+    for (const move of record.moves) {
+      if (move.player !== (state.turn === WHITE ? "white" : "black")) {
+        throw new Error("SGF move order is not supported by this simple loader");
+      }
+      if (move.pass) {
+        if (!pass({ silent: true, localOnly: true })) {
+          throw new Error("Could not replay SGF pass");
+        }
+      } else {
+        if (!playMove(move.row, move.col, { silent: true, localOnly: true })) {
+          throw new Error(`Could not replay SGF move ${move.move}`);
+        }
+      }
+    }
+
+    state.mode = "local";
+    modeSelect.value = "local";
+    state.modeTitle = name.replace(/\.sgf$/i, "") || "Loaded SGF";
+    setMessage(`Loaded ${name}`);
+    syncUi();
+    draw();
+  } catch (error) {
+    restoreState(snapshot);
+    throw error;
+  }
+}
+
+function snapshotState() {
+  return {
+    size: state.size,
+    board: cloneBoard(state.board),
+    turn: state.turn,
+    captures: { ...state.captures },
+    history: state.history.map((entry) => ({ ...entry })),
+    undoStack: state.undoStack.map((entry) => ({
+      board: cloneBoard(entry.board),
+      turn: entry.turn,
+      captures: { ...entry.captures },
+    })),
+    moves: state.moves.map((move) => ({ ...move })),
+    hover: state.hover ? { ...state.hover } : null,
+    moveCount: state.moveCount,
+    monitoring: state.monitoring,
+    apiMode: state.apiMode,
+    apiBusy: state.apiBusy,
+    human: state.human,
+    monitorUpdatedAt: state.monitorUpdatedAt,
+    monitorWorker: state.monitorWorker,
+    mode: state.mode,
+    modeTitle: state.modeTitle,
+  };
+}
+
+function restoreState(snapshot) {
+  Object.assign(state, snapshot);
+  state.board = cloneBoard(snapshot.board);
+  state.captures = { ...snapshot.captures };
+  state.history = snapshot.history.map((entry) => ({ ...entry }));
+  state.undoStack = snapshot.undoStack.map((entry) => ({
+    board: cloneBoard(entry.board),
+    turn: entry.turn,
+    captures: { ...entry.captures },
+  }));
+  state.moves = snapshot.moves.map((move) => ({ ...move }));
+  state.hover = snapshot.hover ? { ...snapshot.hover } : null;
+  boardSizeSelect.value = `${state.size}`;
+  modeSelect.value = state.mode;
+  syncUi();
+  draw();
+}
+
+function parseSgf(content) {
+  const sizeMatch = /SZ\s*\[\s*(\d+)\s*\]/i.exec(content);
+  const size = sizeMatch ? Number(sizeMatch[1]) : 19;
+  if (![9, 13, 19].includes(size)) {
+    throw new Error(`Unsupported SGF board size: ${size}`);
+  }
+
+  const moves = [];
+  const movePattern = /;([BW])\[((?:\\.|[^\]])*)\]/gi;
+  let match = movePattern.exec(content);
+  while (match) {
+    const player = match[1].toUpperCase() === "W" ? "white" : "black";
+    const rawPoint = unescapeSgfValue(match[2]).trim();
+    if (rawPoint === "" || rawPoint.length < 2) {
+      moves.push({ player, pass: true });
+    } else {
+      const col = rawPoint.charCodeAt(0) - 97;
+      const row = rawPoint.charCodeAt(1) - 97;
+      if (!inBoundsForSize(row, col, size)) {
+        throw new Error(`SGF point is outside ${size}x${size}: ${rawPoint}`);
+      }
+      moves.push({ player, row, col, move: pointNameForSize(row, col, size), pass: false });
+    }
+    match = movePattern.exec(content);
+  }
+
+  return { size, moves };
+}
+
+function unescapeSgfValue(value) {
+  return value.replace(/\\([\s\S])/g, "$1");
 }
 
 function monitorMessage(data) {
@@ -668,10 +980,11 @@ undoButton.addEventListener("click", undo);
 resetButton.addEventListener("click", () => {
   if (!state.monitoring && !state.apiMode) reset(state.size);
 });
-playSygoButton.addEventListener("click", startSygoGame);
-stopPlayButton.addEventListener("click", stopSygoGame);
-watchButton.addEventListener("click", startMonitoring);
-stopWatchButton.addEventListener("click", stopMonitoring);
+startModeButton.addEventListener("click", startSelectedMode);
+stopModeButton.addEventListener("click", stopActiveMode);
+loadSgfButton.addEventListener("click", promptLoadSgf);
+loadSgfInput.addEventListener("change", loadSgfFile);
+saveSgfButton.addEventListener("click", saveSgf);
 monitorWorkerSelect.addEventListener("change", () => {
   state.monitorWorker = Number(monitorWorkerSelect.value);
   state.monitorUpdatedAt = null;
@@ -684,3 +997,4 @@ window.addEventListener("resize", draw);
 
 reset();
 setMonitoring(false);
+loadPlayConfig().finally(() => refreshControls());

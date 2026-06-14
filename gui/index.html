@@ -54,20 +54,34 @@
           </select>
         </div>
 
+        <div class="control-group">
+          <label for="board-mode">Mode</label>
+          <select id="board-mode">
+            <option value="local" selected>Local board</option>
+            <option value="play">User vs. Sygo</option>
+            <option value="watch">Watch self-play</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label for="checkpoint-select">Sygo checkpoint</label>
+          <select id="checkpoint-select">
+            <option value="">Uniform test evaluator</option>
+          </select>
+        </div>
+
         <div class="button-row">
           <button id="pass-button" type="button">Pass</button>
           <button id="undo-button" type="button">Undo</button>
           <button id="reset-button" type="button">Reset</button>
         </div>
 
-        <div class="play-row">
-          <button id="play-sygo-button" type="button">Play Sygo</button>
-          <button id="stop-play-button" type="button">Stop game</button>
+        <div class="mode-row">
+          <button id="start-mode-button" type="button">Start</button>
+          <button id="stop-mode-button" type="button">Stop</button>
         </div>
 
         <div class="monitor-row">
-          <button id="watch-button" type="button">Watch self-play</button>
-          <button id="stop-watch-button" type="button">Stop</button>
           <label for="monitor-worker">Worker</label>
           <select id="monitor-worker">
             <option value="1">1</option>
@@ -88,6 +102,12 @@
             <option value="16">16</option>
           </select>
           <span id="monitor-status">Manual board</span>
+        </div>
+
+        <div class="sgf-row">
+          <input id="load-sgf-input" type="file" accept=".sgf,application/x-go-sgf,text/plain" />
+          <button id="load-sgf-button" type="button">Load SGF</button>
+          <button id="save-sgf-button" type="button">Save SGF</button>
         </div>
 
         <section class="log-panel" aria-label="Move log">
